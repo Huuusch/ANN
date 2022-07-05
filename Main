@@ -1,0 +1,136 @@
+#!/usr/bin/env python3 
+# -*- coding: utf-8 -*-
+"""
+
+"""
+
+import pandas as pd
+from tensorflow import keras
+from tensorflow.keras import layers
+from sklearn.metrics import mean_squared_error,r2_score,mean_absolute_error#Import the evaluation index of regression model - mean square error MSE, fitting Youdu R2, mean absolute error
+import sherpa
+import tensorflow
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Dense, Flatten
+from tensorflow.keras.optimizers import Adam
+import tempfile
+import os
+import shutil
+import tensorflow.keras.backend as K
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import cm
+import time
+import numpy as np
+
+OPTIMIZATION_LOSS=100 #optimization iteration
+COMPARE_LOSS=1000 #contrast iteration
+#=======================================================================
+#Defining Neural Network Functions
+#=======================================================================
+def build_model(layer_size1,
+                #layer_size2,
+                learning_rate,
+                activation ):  
+    
+  model=keras.Sequential()
+  model.add(layers.Dense(layer_size1,activation))
+  #model.add(layers.Dense(layer_size2,activation))
+  model.add(layers.Dense(1, "linear"))
+  model.compile(optimizer = Adam(lr=learning_rate),loss='mean_squared_error')
+  return model      
+#=======================================================================
+#Data processing and analysis
+#=======================================================================
+#Call data(csvv-file) "/Users/muqiliu/Desktop/CT.csv"
+dataset = pd.read_csv("/Users/muqiliu/Downloads/C61.csv", header = None)#, verbose=False, sep=";"
+dataset = dataset.drop(0)
+
+X = dataset.iloc[:,:] #unabhängige Variable
+y = dataset.iloc[0:2517,6] #abhängige Variable
+
+
+
+
+X=np.asarray(X).astype(np.float32)
+y=np.asarray(y).astype(np.float32)
+X =X[:,[0,1,4,5]]
+
+
+#Normalizing the data
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X = sc.fit_transform(X)
+
+
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split( X[:2017,:], y[:2017], test_size = 0.001, random_state = 0)
+
+#=======================================================================
+#PBT
+#=======================================================================
+parameters = [sherpa.Continuous('learning_rate', [1e-4, 1e-1]),
+              sherpa.Continuous('layer_size1', [3, 50]),
+             # sherpa.Continuous('layer_size2', [3, 50]),
+             sherpa.Choice("activation", ['sigmoid','tanh'])]
+algorithm = sherpa.algorithms.PopulationBasedTraining(population_size=5,
+                                                      num_generations=5,
+                                                      perturbation_factors=(0.8, 1.2),
+                                                      parameter_range={'learning_rate': [1e-6, 1e-1]})
+study = sherpa.Study(parameters=parameters,
+                     algorithm=algorithm,
+                     lower_is_better=True,
+                     disable_dashboard=True)
+startTime=time.time()
+for trial in study:
+    generation =trial.parameters['generation']
+    training_lr =trial.parameters['learning_rate']
+    trial.parameters['layer_size1']=int(trial.parameters['layer_size1'])
+    #trial.parameters['layer_size2']=int(trial.parameters['layer_size2'])
+    training_layer_size1=trial.parameters['layer_size1']
+    #training_layer_size2=trial.parameters['layer_size2']
+    training_activation=trial.parameters['activation']
+
+    print("-"*100)
+    print("Generation {}".format(generation))    
+
+    print("Creating new model with learning rate {}\n".format(training_lr))
+
+    # Create model
+  
+    # Use learning rate parameter for optimizer  
+    model=build_model(layer_size1 = training_layer_size1,
+                     #layer_size2 = training_layer_size2,
+                    learning_rate = training_lr,
+                    activation = training_activation)
+    # Train model for one epoch   
+    model.fit(X_train,y_train,epochs = OPTIMIZATION_LOSS, batch_size =64,verbose=0)
+    loss_test= model.evaluate(X[2017:2517,:], y[2017:2517]) 
+    loss_train = model.evaluate(X_train,y_train,)  
+
+    print("Train loss: ", loss_train)
+    print("Validation loss: ", loss_test)
+    study.add_observation(trial, iteration=generation,objective=loss_test,context={'training_error': loss_test})
+    study.finalize(trial=trial)
+    
+endTime=time.time()     
+PBT_best_result=study.get_best_result()
+
+model=build_model(layer_size1 = PBT_best_result['layer_size1'],
+                 # layer_size2 = PBT_best_result['layer_size2'],
+                learning_rate = PBT_best_result['learning_rate'],
+                activation = PBT_best_result['activation'])
+
+history = model.fit(X_train,y_train,epochs = COMPARE_LOSS, batch_size = 64,verbose=1)
+history_PBT=pd.DataFrame(history.history)
+
+# 查看loss迭代中的收敛
+plt.plot(history_PBT)
+
+#查看训练预测与实际值
+hu = model.predict(X_train)
+plt.plot(hu)
+plt.plot(y_train)
+plt.show()
